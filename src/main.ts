@@ -6,6 +6,8 @@ import { Water } from "./scene/Water";
 import { createSkyMesh } from "./scene/Sky";
 import compositeVertexShader from "./shaders/compositeVertex.glsl?raw";
 import compositeFragmentShader from "./shaders/compositeFragment.glsl?raw";
+import taaVertexShader from "./shaders/taaVertex.glsl?raw";
+import taaFragmentShader from "./shaders/taaFragment.glsl?raw";
 
 // Setup WebGL Renderer
 const container = document.getElementById("root") || document.body;
@@ -138,12 +140,58 @@ const cloudRenderTarget = new THREE.WebGLRenderTarget(
   cloudTargetW,
   cloudTargetH,
   {
+    count: 2,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
     format: THREE.RGBAFormat,
     type: THREE.HalfFloatType,
-  },
+  }
 );
+cloudRenderTarget.textures[0].name = "color";
+cloudRenderTarget.textures[1].name = "distance";
+
+const createTAATarget = () => new THREE.WebGLRenderTarget(fullWidth, fullHeight, {
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  format: THREE.RGBAFormat,
+  type: THREE.HalfFloatType,
+});
+let taaHistoryA = createTAATarget();
+let taaHistoryB = createTAATarget();
+let taaReadTarget = taaHistoryA;
+let taaWriteTarget = taaHistoryB;
+
+let frameCount = 0;
+// Halton Sequence (2, 3) for 16 samples
+const halton23 = [
+    [0.5, 0.33333333], [0.25, 0.66666667], [0.75, 0.11111111], [0.125, 0.44444444],
+    [0.625, 0.77777778], [0.375, 0.22222222], [0.875, 0.55555556], [0.0625, 0.88888889],
+    [0.5625, 0.03703704], [0.3125, 0.37037037], [0.8125, 0.7037037], [0.1875, 0.14814815],
+    [0.6875, 0.48148148], [0.4375, 0.81481481], [0.9375, 0.25925926], [0.03125, 0.59259259]
+];
+
+// Tracking matrices for reprojection
+const previousViewProjectionMatrix = new THREE.Matrix4();
+
+const taaMaterial = new THREE.ShaderMaterial({
+  depthWrite: false,
+  depthTest: false,
+  uniforms: {
+    uCurrentCloud: { value: cloudRenderTarget.textures[0] },
+    uCurrentDistance: { value: cloudRenderTarget.textures[1] },
+    uHistoryCloud: { value: taaReadTarget.texture },
+    uPreviousViewProjectionMatrix: { value: new THREE.Matrix4() },
+    uViewProjectionMatrixInverse: { value: new THREE.Matrix4() },
+    uCameraPos: { value: new THREE.Vector3() },
+  },
+  vertexShader: taaVertexShader,
+  fragmentShader: taaFragmentShader,
+  glslVersion: THREE.GLSL3,
+});
+
+const taaMesh = new THREE.Mesh(quadGeo, taaMaterial);
+const taaScene = new THREE.Scene();
+taaScene.add(taaMesh);
 
 // Composite Pass — Edge-Aware Bilateral Upsampling Composite Shader
 const compositeMaterial = new THREE.ShaderMaterial({
@@ -151,10 +199,10 @@ const compositeMaterial = new THREE.ShaderMaterial({
   depthTest: false,
   uniforms: {
     uSceneTexture: { value: sceneRenderTarget.texture },
-    uCloudTexture: { value: cloudRenderTarget.texture },
+    uCloudTexture: { value: taaReadTarget.texture },
     uDepthTexture: { value: sceneRenderTarget.depthTexture },
     uTexelSize: {
-      value: new THREE.Vector2(1.0 / cloudTargetW, 1.0 / cloudTargetH),
+      value: new THREE.Vector2(1.0 / fullWidth, 1.0 / fullHeight),
     },
     uProjectionInverse: { value: new THREE.Matrix4() },
     uViewInverse: { value: new THREE.Matrix4() },
@@ -193,6 +241,7 @@ compositeScene.add(compositeMesh);
   const oldView = cloudMaterial.uniforms.uViewInverse.value.clone();
   const oldCamPos = cloudMaterial.uniforms.uCameraPos.value.clone();
   const oldDepth = cloudMaterial.uniforms.uDepthTexture.value;
+  const oldJitter = cloudMaterial.uniforms.uJitter.value.clone();
 
   // Set cloud uniforms to match the mirror camera perspective
   cloudMaterial.uniforms.uProjectionInverse.value.copy(
@@ -201,6 +250,7 @@ compositeScene.add(compositeMesh);
   cloudMaterial.uniforms.uViewInverse.value.copy(mirrorCamera.matrixWorld);
   cloudMaterial.uniforms.uCameraPos.value.copy(mirrorCamera.position);
   cloudMaterial.uniforms.uDepthTexture.value = null; // Disable depth clipping for the sky/reflection pass
+  cloudMaterial.uniforms.uJitter.value.set(0, 0);
 
   // Configure blending so clouds render cleanly over the sky reflection
   cloudMaterial.transparent = true;
@@ -227,6 +277,7 @@ compositeScene.add(compositeMesh);
   cloudMaterial.uniforms.uViewInverse.value.copy(oldView);
   cloudMaterial.uniforms.uCameraPos.value.copy(oldCamPos);
   cloudMaterial.uniforms.uDepthTexture.value = oldDepth;
+  cloudMaterial.uniforms.uJitter.value.copy(oldJitter);
 };
 
 // GUI Controls
@@ -755,6 +806,11 @@ function animate() {
   renderer.render(scene, camera);
 
   // 2. Render volumetric clouds into cloudRenderTarget
+  const jitter = halton23[frameCount % 16];
+  const jitterX = (jitter[0] * 2.0 - 1.0) / cloudTargetW;
+  const jitterY = (jitter[1] * 2.0 - 1.0) / cloudTargetH;
+  cloudMaterial.uniforms.uJitter.value.set(jitterX, jitterY);
+
   cloudMaterial.updateTime(simDelta);
   cloudMaterial.updateCamera(camera);
 
@@ -763,7 +819,36 @@ function animate() {
   renderer.clear();
   renderer.render(cloudScene, postCamera);
 
-  // 3. Composite pass with mathematically exact pitch-invariant SSR reflection
+  // 3. TAA Reprojection Pass
+  taaMaterial.uniforms.uCurrentCloud.value = cloudRenderTarget.textures[0];
+  taaMaterial.uniforms.uCurrentDistance.value = cloudRenderTarget.textures[1];
+  taaMaterial.uniforms.uHistoryCloud.value = taaReadTarget.texture;
+  
+  if (frameCount === 0) {
+    taaMaterial.uniforms.uPreviousViewProjectionMatrix.value.multiplyMatrices(
+      camera.projectionMatrix,
+      camera.matrixWorldInverse
+    );
+  } else {
+    taaMaterial.uniforms.uPreviousViewProjectionMatrix.value.copy(previousViewProjectionMatrix);
+  }
+  
+  taaMaterial.uniforms.uViewProjectionMatrixInverse.value.multiplyMatrices(
+    camera.projectionMatrix,
+    camera.matrixWorldInverse
+  ).invert();
+  taaMaterial.uniforms.uCameraPos.value.copy(camera.position);
+
+  renderer.setRenderTarget(taaWriteTarget);
+  renderer.render(taaScene, postCamera);
+
+  // Swap TAA buffers
+  const temp = taaReadTarget;
+  taaReadTarget = taaWriteTarget;
+  taaWriteTarget = temp;
+  compositeMaterial.uniforms.uCloudTexture.value = taaReadTarget.texture;
+
+  // 4. Composite pass with mathematically exact pitch-invariant SSR reflection
   const horizonDir = new THREE.Vector3(0, 0, -1).applyQuaternion(
     camera.quaternion,
   );
@@ -788,6 +873,13 @@ function animate() {
 
   renderer.setRenderTarget(null);
   renderer.render(compositeScene, postCamera);
+
+  // Update tracking state for next frame
+  previousViewProjectionMatrix.multiplyMatrices(
+    camera.projectionMatrix,
+    camera.matrixWorldInverse
+  );
+  frameCount++;
 }
 
 animate();

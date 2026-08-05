@@ -19,6 +19,7 @@ uniform mat4 uProjectionInverse;
 uniform mat4 uViewInverse;
 uniform vec2 uResolution;
 uniform float uTime;
+uniform vec2 uJitter;
 
 // Cloud Appearance & Shape Uniforms
 uniform float uCloudCoverage;
@@ -98,6 +99,8 @@ float interleavedGradientNoise(vec2 position) {
     vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
     return fract(magic.z * fract(dot(position, magic.xy)));
 }
+
+layout(location = 1) out vec4 fragDistance;
 
 // ACES Filmic Tone Mapping Curve
 vec3 toneMapACES(vec3 x) {
@@ -314,7 +317,7 @@ float calculateLightOpticalDepth(vec3 pos, float dither, float distFromCam) {
 }
 
 void main() {
-    vec2 ndc = vUv * 2.0 - 1.0;
+    vec2 ndc = vUv * 2.0 - 1.0 + uJitter;
 
     // 1. Reconstruct World Ray Direction
     vec4 viewDir = uProjectionInverse * vec4(ndc, -1.0, 1.0);
@@ -480,4 +483,5 @@ void main() {
     vec3 ditheredColor = toneMappedColor + (ignDither - 0.5) / 255.0;
 
     fragColor = vec4(max(vec3(0.0), ditheredColor), alpha);
+    fragDistance = vec4(t, 0.0, 0.0, 1.0);
 }

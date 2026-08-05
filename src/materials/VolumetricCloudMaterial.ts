@@ -141,6 +141,7 @@ export class VolumetricCloudMaterial extends THREE.ShaderMaterial {
           value: new THREE.Vector2(window.innerWidth, window.innerHeight),
         },
         uTime: { value: 0 },
+        uJitter: { value: new THREE.Vector2(0, 0) },
 
         uCloudCoverage: { value: 0.65 },
         uCloudScale: { value: 0.85 },

@@ -64,29 +64,7 @@ void main() {
   float rawDepth = texture2D(uDepthTexture, vUv).r;
   float centerDepth = getLinearDepth(rawDepth);
 
-  // 3x3 Cross-Bilateral Sampling around low-res cloud texel
-  vec4 cloudSum = vec4(0.0);
-  float weightSum = 0.0;
-
-  for (int x = -1; x <= 1; x++) {
-    for (int y = -1; y <= 1; y++) {
-      vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-      vec2 sampleUv = vUv + offset;
-
-      vec4 cloudSample = texture2D(uCloudTexture, sampleUv);
-      float sampleDepth = getLinearDepth(texture2D(uDepthTexture, sampleUv).r);
-
-      float depthDiff = abs(centerDepth - sampleDepth);
-      float spatialWeight = exp(-float(x * x + y * y) * 0.5);
-      float depthWeight = exp(-depthDiff * 0.02);
-
-      float w = spatialWeight * depthWeight;
-      cloudSum += cloudSample * w;
-      weightSum += w;
-    }
-  }
-
-  vec4 cloud = (weightSum > 0.0001) ? (cloudSum / weightSum) : texture2D(uCloudTexture, vUv);
+  vec4 cloud = texture2D(uCloudTexture, vUv);
 
   vec3 color = scene.rgb * (1.0 - cloud.a) + cloud.rgb;
 
