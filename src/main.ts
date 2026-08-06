@@ -123,7 +123,11 @@ const sceneRenderTarget = new THREE.WebGLRenderTarget(fullWidth, fullHeight, {
 });
 
 // Volumetric Clouds Material — created immediately, textures load async in worker
-const cloudMaterial = VolumetricCloudMaterial.createAsync();
+const cloudMaterial = VolumetricCloudMaterial.createAsync({}, (base, detail, weather) => {
+  if (cloudCompute) {
+    cloudCompute.setNoiseTextures(base, detail, weather);
+  }
+});
 
 cloudMaterial.setDepthTexture(sceneRenderTarget.depthTexture);
 
@@ -131,11 +135,17 @@ const cloudQuadMesh = new THREE.Mesh(quadGeo, cloudMaterial);
 const cloudScene = new THREE.Scene();
 cloudScene.add(cloudQuadMesh);
 
-// Cloud Render Target — THREE.HalfFloatType for HDR precision & bandwidth optimization
+// Cloud Render Target Setup — WebGPU compute shader with WebGL fallback
 let renderScale = 0.5;
+import { WebGPUCloudRenderer } from "./scene/WebGPUCloudRenderer";
+
 let cloudTargetW = Math.max(Math.floor(fullWidth * renderScale), 1);
 let cloudTargetH = Math.max(Math.floor(fullHeight * renderScale), 1);
 
+const cloudCompute = new WebGPUCloudRenderer(cloudTargetW, cloudTargetH);
+cloudCompute.init();
+
+// WebGL Fallback Target
 const cloudRenderTarget = new THREE.WebGLRenderTarget(
   cloudTargetW,
   cloudTargetH,
@@ -149,6 +159,7 @@ const cloudRenderTarget = new THREE.WebGLRenderTarget(
 );
 cloudRenderTarget.textures[0].name = "color";
 cloudRenderTarget.textures[1].name = "distance";
+
 
 const createTAATarget = () => new THREE.WebGLRenderTarget(fullWidth, fullHeight, {
   minFilter: THREE.LinearFilter,
@@ -177,8 +188,8 @@ const taaMaterial = new THREE.ShaderMaterial({
   depthWrite: false,
   depthTest: false,
   uniforms: {
-    uCurrentCloud: { value: cloudRenderTarget.textures[0] },
-    uCurrentDistance: { value: cloudRenderTarget.textures[1] },
+    uCurrentCloud: { value: cloudCompute.colorTexture },
+    uCurrentDistance: { value: cloudCompute.distanceTexture },
     uHistoryCloud: { value: taaReadTarget.texture },
     uPreviousViewProjectionMatrix: { value: new THREE.Matrix4() },
     uViewProjectionMatrixInverse: { value: new THREE.Matrix4() },
@@ -200,6 +211,7 @@ const compositeMaterial = new THREE.ShaderMaterial({
   uniforms: {
     uSceneTexture: { value: sceneRenderTarget.texture },
     uCloudTexture: { value: taaReadTarget.texture },
+    uCloudDistance: { value: cloudCompute.distanceTexture },
     uDepthTexture: { value: sceneRenderTarget.depthTexture },
     uTexelSize: {
       value: new THREE.Vector2(1.0 / fullWidth, 1.0 / fullHeight),
@@ -289,6 +301,7 @@ const params = {
   autoCycleSpeed: 0.5,
 
   resScale: "0.5x (Smooth 60 FPS)",
+  useWebGPUCompute: false,
   coverage: 0.7,
   density: 1.8,
   cloudScale: 1.5,
@@ -480,6 +493,7 @@ const updateResolutionTargets = () => {
   cloudTargetW = Math.max(Math.floor(fullWidth * renderScale), 1);
   cloudTargetH = Math.max(Math.floor(fullHeight * renderScale), 1);
 
+  cloudCompute.setSize(cloudTargetW, cloudTargetH);
   cloudRenderTarget.setSize(cloudTargetW, cloudTargetH);
 
   cloudMaterial.updateResolution(cloudTargetW, cloudTargetH);
@@ -551,6 +565,9 @@ qualityFolder
   ])
   .name("Cloud Resolution")
   .onChange(updateResolutionTargets);
+qualityFolder
+  .add(params, "useWebGPUCompute")
+  .name("Experimental WebGPU Compute");
 
 const shapeFolder = gui.addFolder("Cloud Formation & Density");
 shapeFolder
@@ -772,12 +789,14 @@ window.addEventListener("resize", () => {
 cloudMaterial.updateResolution(cloudTargetW, cloudTargetH);
 
 // Animation Loop
-const clock = new THREE.Clock();
+let lastTime = performance.now();
 
 function animate() {
   requestAnimationFrame(animate);
 
-  const delta = clock.getDelta();
+  const now = performance.now();
+  const delta = Math.min((now - lastTime) / 1000, 0.1);
+  lastTime = now;
 
   if (params.autoCycle) {
     params.timeOfDay =
@@ -800,28 +819,37 @@ function animate() {
   // Dynamic Camera-Centered Sky Mesh
   skyMesh.position.copy(camera.position);
 
-  // 2. Main scene pass (renders terrain, sky, and water including its mirror pass)
+  // 1. Main scene pass (renders terrain, sky, and water including its mirror pass)
   (water.material as THREE.ShaderMaterial).uniforms["time"].value += simDelta;
   renderer.setRenderTarget(sceneRenderTarget);
   renderer.render(scene, camera);
 
-  // 2. Render volumetric clouds into cloudRenderTarget
+  // 2. Render volumetric clouds into WebGPU Compute Shader (or WebGL fallback)
   const jitter = halton23[frameCount % 16];
   const jitterX = (jitter[0] * 2.0 - 1.0) / cloudTargetW;
   const jitterY = (jitter[1] * 2.0 - 1.0) / cloudTargetH;
-  cloudMaterial.uniforms.uJitter.value.set(jitterX, jitterY);
 
-  cloudMaterial.updateTime(simDelta);
-  cloudMaterial.updateCamera(camera);
+  if (params.useWebGPUCompute && cloudCompute.isAvailable) {
+    // WebGPU Compute Shader (double-buffered — zero main thread stall)
+    cloudCompute.tickFrame(camera, now / 1000, jitterX, jitterY, cloudMaterial);
+    taaMaterial.uniforms.uCurrentCloud.value = cloudCompute.colorTexture;
+    taaMaterial.uniforms.uCurrentDistance.value = cloudCompute.distanceTexture;
+    compositeMaterial.uniforms.uCloudDistance.value = cloudCompute.distanceTexture;
+  } else {
+    // WebGL Fallback Pass
+    cloudMaterial.uniforms.uJitter.value.set(jitterX, jitterY);
+    cloudMaterial.updateTime(simDelta);
+    cloudMaterial.updateCamera(camera);
 
-  renderer.setClearColor(0x000000, 0.0);
-  renderer.setRenderTarget(cloudRenderTarget);
-  renderer.clear();
-  renderer.render(cloudScene, postCamera);
+    renderer.setClearColor(0x000000, 0.0);
+    renderer.setRenderTarget(cloudRenderTarget);
+    renderer.clear();
+    renderer.render(cloudScene, postCamera);
 
-  // 3. TAA Reprojection Pass
-  taaMaterial.uniforms.uCurrentCloud.value = cloudRenderTarget.textures[0];
-  taaMaterial.uniforms.uCurrentDistance.value = cloudRenderTarget.textures[1];
+    taaMaterial.uniforms.uCurrentCloud.value = cloudRenderTarget.textures[0];
+    taaMaterial.uniforms.uCurrentDistance.value = cloudRenderTarget.textures[1];
+    compositeMaterial.uniforms.uCloudDistance.value = cloudRenderTarget.textures[1];
+  }
   taaMaterial.uniforms.uHistoryCloud.value = taaReadTarget.texture;
   
   if (frameCount === 0) {

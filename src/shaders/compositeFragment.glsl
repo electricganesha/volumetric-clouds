@@ -3,6 +3,7 @@ varying vec2 vUv;
 
 uniform sampler2D uSceneTexture;
 uniform sampler2D uCloudTexture;
+uniform sampler2D uCloudDistance;
 uniform sampler2D uDepthTexture;
 uniform vec2 uTexelSize;
 uniform mat4 uProjectionInverse;
@@ -65,6 +66,12 @@ void main() {
   float centerDepth = getLinearDepth(rawDepth);
 
   vec4 cloud = texture2D(uCloudTexture, vUv);
+  float cloudDistance = texture2D(uCloudDistance, vUv).r;
+
+  // If cloud is behind the terrain, occlude it
+  if (cloudDistance > centerDepth && centerDepth < 250000.0) {
+      cloud.a = 0.0;
+  }
 
   vec3 color = scene.rgb * (1.0 - cloud.a) + cloud.rgb;
 

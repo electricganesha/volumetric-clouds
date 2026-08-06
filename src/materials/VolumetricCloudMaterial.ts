@@ -68,6 +68,7 @@ export class VolumetricCloudMaterial extends THREE.ShaderMaterial {
    */
   static createAsync(
     _options: VolumetricCloudMaterialOptions = {},
+    onLoaded?: (base: ArrayBuffer, detail: ArrayBuffer, weather: ArrayBuffer) => void
   ): VolumetricCloudMaterial {
     const mat = new VolumetricCloudMaterial();
 
@@ -91,6 +92,10 @@ export class VolumetricCloudMaterial extends THREE.ShaderMaterial {
       mat.uniforms.uDetailNoise.value = buildDetail3D(detail, 64);
       mat.uniforms.uWeatherMap.value = buildWeather2D(weather, 256, 256);
       mat.needsUpdate = true;
+
+      if (onLoaded) {
+        onLoaded(base, detail, weather);
+      }
 
       // Hide loading overlay
       const overlay = document.getElementById("loading-overlay");
