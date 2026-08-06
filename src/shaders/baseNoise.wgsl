@@ -31,9 +31,16 @@ fn grad3(hash: u32) -> vec3<f32> {
     }
 }
 
-fn hashPerm(p: vec3<f32>, seed: f32) -> u32 {
-    let h = dot(p, vec3<f32>(12.9898, 78.233, 45.164)) + seed;
-    return u32(fract(sin(h) * 43758.5453) * 255.0);
+fn hashPerm(rx: f32, ry: f32, rz: f32, seed: f32) -> u32 {
+    let ix = u32(abs(rx));
+    let iy = u32(abs(ry));
+    let iz = u32(abs(rz));
+    let iseed = u32(abs(seed * 100.0));
+    var h = ix * 1597334677u ^ iy * 3812015801u ^ iz * 3299498291u ^ iseed;
+    h = (h ^ (h >> 16u)) * 0x45d9f3bu;
+    h = (h ^ (h >> 16u)) * 0x45d9f3bu;
+    h = h ^ (h >> 16u);
+    return h;
 }
 
 fn periodicPerlin3D(p: vec3<f32>, rep: f32, seed: f32) -> f32 {
@@ -49,14 +56,14 @@ fn periodicPerlin3D(p: vec3<f32>, rep: f32, seed: f32) -> f32 {
 
     let u = fade(fx); let v = fade(fy); let w = fade(fz);
 
-    let n000 = dot(grad3(hashPerm(vec3<f32>(rx0, ry0, rz0), seed)), vec3<f32>(fx, fy, fz));
-    let n100 = dot(grad3(hashPerm(vec3<f32>(rx1, ry0, rz0), seed)), vec3<f32>(fx - 1.0, fy, fz));
-    let n010 = dot(grad3(hashPerm(vec3<f32>(rx0, ry1, rz0), seed)), vec3<f32>(fx, fy - 1.0, fz));
-    let n110 = dot(grad3(hashPerm(vec3<f32>(rx1, ry1, rz0), seed)), vec3<f32>(fx - 1.0, fy - 1.0, fz));
-    let n001 = dot(grad3(hashPerm(vec3<f32>(rx0, ry0, rz1), seed)), vec3<f32>(fx, fy, fz - 1.0));
-    let n101 = dot(grad3(hashPerm(vec3<f32>(rx1, ry0, rz1), seed)), vec3<f32>(fx - 1.0, fy - 1.0, fz - 1.0));
-    let n011 = dot(grad3(hashPerm(vec3<f32>(rx0, ry1, rz1), seed)), vec3<f32>(fx, fy - 1.0, fz - 1.0));
-    let n111 = dot(grad3(hashPerm(vec3<f32>(rx1, ry1, rz1), seed)), vec3<f32>(fx - 1.0, fy - 1.0, fz - 1.0));
+    let n000 = dot(grad3(hashPerm(rx0, ry0, rz0, seed)), vec3<f32>(fx, fy, fz));
+    let n100 = dot(grad3(hashPerm(rx1, ry0, rz0, seed)), vec3<f32>(fx - 1.0, fy, fz));
+    let n010 = dot(grad3(hashPerm(rx0, ry1, rz0, seed)), vec3<f32>(fx, fy - 1.0, fz));
+    let n110 = dot(grad3(hashPerm(rx1, ry1, rz0, seed)), vec3<f32>(fx - 1.0, fy - 1.0, fz));
+    let n001 = dot(grad3(hashPerm(rx0, ry0, rz1, seed)), vec3<f32>(fx, fy, fz - 1.0));
+    let n101 = dot(grad3(hashPerm(rx1, ry0, rz1, seed)), vec3<f32>(fx - 1.0, fy, fz - 1.0));
+    let n011 = dot(grad3(hashPerm(rx0, ry1, rz1, seed)), vec3<f32>(fx, fy - 1.0, fz - 1.0));
+    let n111 = dot(grad3(hashPerm(rx1, ry1, rz1, seed)), vec3<f32>(fx - 1.0, fy - 1.0, fz - 1.0));
 
     let nx00 = lerp(n000, n100, u);
     let nx10 = lerp(n010, n110, u);
@@ -70,12 +77,31 @@ fn periodicPerlin3D(p: vec3<f32>, rep: f32, seed: f32) -> f32 {
 }
 
 fn hash3(p: vec3<f32>, seed: f32) -> vec3<f32> {
-    let h = vec3<f32>(
-        dot(p, vec3<f32>(127.1, 311.7, 74.7)),
-        dot(p, vec3<f32>(269.5, 183.3, 246.1)),
-        dot(p, vec3<f32>(419.2, 371.9, 118.5))
+    let ix = u32(abs(p.x));
+    let iy = u32(abs(p.y));
+    let iz = u32(abs(p.z));
+    let iseed = u32(abs(seed * 100.0));
+
+    var h1 = ix * 1597334677u ^ iy * 3812015801u ^ iz * 3299498291u ^ iseed;
+    h1 = (h1 ^ (h1 >> 16u)) * 0x45d9f3bu;
+    h1 = (h1 ^ (h1 >> 16u)) * 0x45d9f3bu;
+    h1 = h1 ^ (h1 >> 16u);
+
+    var h2 = ix * 3812015801u ^ iy * 3299498291u ^ iz * 1597334677u ^ (iseed + 101u);
+    h2 = (h2 ^ (h2 >> 16u)) * 0x45d9f3bu;
+    h2 = (h2 ^ (h2 >> 16u)) * 0x45d9f3bu;
+    h2 = h2 ^ (h2 >> 16u);
+
+    var h3 = ix * 3299498291u ^ iy * 1597334677u ^ iz * 3812015801u ^ (iseed + 203u);
+    h3 = (h3 ^ (h3 >> 16u)) * 0x45d9f3bu;
+    h3 = (h3 ^ (h3 >> 16u)) * 0x45d9f3bu;
+    h3 = h3 ^ (h3 >> 16u);
+
+    return vec3<f32>(
+        f32(h1 % 65536u) / 65536.0,
+        f32(h2 % 65536u) / 65536.0,
+        f32(h3 % 65536u) / 65536.0
     );
-    return fract(sin(h + seed) * 43758.5453);
 }
 
 fn periodicWorley3D(p: vec3<f32>, frequency: f32, seed: f32) -> f32 {

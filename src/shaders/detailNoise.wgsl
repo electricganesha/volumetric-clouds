@@ -6,12 +6,31 @@ struct OutputBuffer {
 @group(0) @binding(1) var<uniform> size: u32;
 
 fn hash3(p: vec3<f32>, seed: f32) -> vec3<f32> {
-    let h = vec3<f32>(
-        dot(p, vec3<f32>(127.1, 311.7, 74.7)),
-        dot(p, vec3<f32>(269.5, 183.3, 246.1)),
-        dot(p, vec3<f32>(419.2, 371.9, 118.5))
+    let ix = u32(abs(p.x));
+    let iy = u32(abs(p.y));
+    let iz = u32(abs(p.z));
+    let iseed = u32(abs(seed * 100.0));
+
+    var h1 = ix * 1597334677u ^ iy * 3812015801u ^ iz * 3299498291u ^ iseed;
+    h1 = (h1 ^ (h1 >> 16u)) * 0x45d9f3bu;
+    h1 = (h1 ^ (h1 >> 16u)) * 0x45d9f3bu;
+    h1 = h1 ^ (h1 >> 16u);
+
+    var h2 = ix * 3812015801u ^ iy * 3299498291u ^ iz * 1597334677u ^ (iseed + 101u);
+    h2 = (h2 ^ (h2 >> 16u)) * 0x45d9f3bu;
+    h2 = (h2 ^ (h2 >> 16u)) * 0x45d9f3bu;
+    h2 = h2 ^ (h2 >> 16u);
+
+    var h3 = ix * 3299498291u ^ iy * 1597334677u ^ iz * 3812015801u ^ (iseed + 203u);
+    h3 = (h3 ^ (h3 >> 16u)) * 0x45d9f3bu;
+    h3 = (h3 ^ (h3 >> 16u)) * 0x45d9f3bu;
+    h3 = h3 ^ (h3 >> 16u);
+
+    return vec3<f32>(
+        f32(h1 % 65536u) / 65536.0,
+        f32(h2 % 65536u) / 65536.0,
+        f32(h3 % 65536u) / 65536.0
     );
-    return fract(sin(h + seed) * 43758.5453);
 }
 
 fn periodicWorley3D(p: vec3<f32>, frequency: f32, seed: f32) -> f32 {

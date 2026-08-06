@@ -75,40 +75,27 @@ export class VolumetricCloudMaterial extends THREE.ShaderMaterial {
   ): VolumetricCloudMaterial {
     const mat = new VolumetricCloudMaterial();
 
-    // Spawn worker — Vite handles the ?worker import at build time
+    const hideOverlay = () => {
+      const overlay = document.getElementById("loading-overlay");
+      if (overlay) overlay.style.opacity = "0";
+      setTimeout(() => overlay?.remove(), 600);
+    };
+
+    // Off-thread Web Worker Noise Generation — Zero main thread latency
     const worker = new Worker(
       new URL("../noise/noiseWorker.ts", import.meta.url),
-      { type: "module" },
+      { type: "module" }
     );
-
-    worker.onmessage = (
-      e: MessageEvent<{
-        base: ArrayBuffer;
-        detail: ArrayBuffer;
-        weather: ArrayBuffer;
-      }>,
-    ) => {
+    worker.onmessage = (e) => {
       const { base, detail, weather } = e.data;
-
-      // Build real textures and hot-swap the uniforms
       mat.uniforms.uBaseNoise.value = buildBase3D(base, 128);
       mat.uniforms.uDetailNoise.value = buildDetail3D(detail, 64);
       mat.uniforms.uWeatherMap.value = buildWeather2D(weather, 256, 256);
       mat.needsUpdate = true;
-
-      if (onLoaded) {
-        onLoaded(base, detail, weather);
-      }
-
-      // Hide loading overlay
-      const overlay = document.getElementById("loading-overlay");
-      if (overlay) overlay.style.opacity = "0";
-      setTimeout(() => overlay?.remove(), 600);
-
+      if (onLoaded) onLoaded(base, detail, weather);
+      hideOverlay();
       worker.terminate();
     };
-
-    // Start work
     worker.postMessage(null);
 
     return mat;
