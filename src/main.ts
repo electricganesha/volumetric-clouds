@@ -9,14 +9,22 @@ import compositeFragmentShader from "./shaders/compositeFragment.glsl?raw";
 import taaVertexShader from "./shaders/taaVertex.glsl?raw";
 import taaFragmentShader from "./shaders/taaFragment.glsl?raw";
 
+// Detect Mobile Device / High-DPI Mobile GPU (e.g. Pixel 8 Pro, iPhone)
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+  typeof navigator !== "undefined" ? navigator.userAgent : ""
+) || (typeof window !== "undefined" && window.innerWidth <= 768);
+
+// Cap max DPR on mobile to 1.0 to prevent 36MP fill-rate bottleneck on 3.0x DPR screens
+const maxDpr = isMobile ? 1.0 : 1.25;
+
 // Setup WebGL Renderer
 const container = document.getElementById("root") || document.body;
 const renderer = new THREE.WebGLRenderer({
-  antialias: true,
+  antialias: !isMobile,
   powerPreference: "high-performance",
 });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxDpr));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.92;
 container.appendChild(renderer.domElement);
@@ -70,9 +78,11 @@ scene.fog = new THREE.FogExp2(0x8db8d8, 0.000018);
 // Three.js Water Object — plane must exceed camera far (300k) on all sides
 const waterGeo = new THREE.PlaneGeometry(800000, 800000);
 
+const waterTexSize = isMobile ? 256 : 512;
+
 const water = new Water(waterGeo, {
-  textureWidth: 512,
-  textureHeight: 512,
+  textureWidth: waterTexSize,
+  textureHeight: waterTexSize,
   waterNormals: new THREE.TextureLoader().load(
     "/waternormals.jpg",
     function (texture) {
@@ -264,6 +274,7 @@ compositeScene.add(compositeMesh);
   cloudMaterial.uniforms.uCameraPos.value.copy(mirrorCamera.position);
   cloudMaterial.uniforms.uDepthTexture.value = null; // Disable depth clipping for the sky/reflection pass
   cloudMaterial.uniforms.uJitter.value.set(0, 0);
+  cloudMaterial.uniforms.uIsReflectionPass.value = true;
 
   // Configure blending so clouds render cleanly over the sky reflection
   cloudMaterial.transparent = true;
@@ -284,6 +295,7 @@ compositeScene.add(compositeMesh);
   renderer.autoClear = oldAutoClear;
 
   // Restore main camera uniforms and material states
+  cloudMaterial.uniforms.uIsReflectionPass.value = false;
   cloudMaterial.depthTest = true;
   cloudMaterial.blending = THREE.NormalBlending;
   cloudMaterial.uniforms.uProjectionInverse.value.copy(oldProj);
@@ -301,7 +313,7 @@ const params = {
   autoCycle: false,
   autoCycleSpeed: 0.5,
 
-  resScale: "0.5x (Smooth 60 FPS)",
+  resScale: isMobile ? "0.35x (Fast Mobile)" : "0.5x (Smooth 60 FPS)",
   useWebGPUCompute: false,
   coverage: 0.7,
   density: 1.8,
@@ -560,6 +572,7 @@ const qualityFolder = gui.addFolder("Performance & Quality");
 qualityFolder
   .add(params, "resScale", [
     "0.25x (Ultra Fast)",
+    "0.35x (Fast Mobile)",
     "0.5x (Smooth 60 FPS)",
     "0.75x (High Quality)",
     "1.0x (Native Resolution)",

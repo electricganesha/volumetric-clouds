@@ -22,6 +22,7 @@ uniform mat4 uViewInverse;
 uniform vec2 uResolution;
 uniform float uTime;
 uniform vec2 uJitter;
+uniform bool uIsReflectionPass;
 
 // Cloud Appearance & Shape Uniforms
 uniform float uCloudCoverage;
@@ -380,7 +381,7 @@ void main() {
     tFar = min(tFar, tMaxScene);
 
     // 4. Raymarching Step Setup
-    const int MAX_STEPS = 64;
+    int maxSteps = uIsReflectionPass ? 48 : 64;
     float slabDist  = tFar - tNear;
     float stepScale = clamp(slabDist / 20000.0, 1.0, 3.0);
 
@@ -388,7 +389,12 @@ void main() {
     float EMPTY_STEP = FINE_STEP * 2.5;    
     float MACRO_STEP = EMPTY_STEP * 3.5;
 
-    float ditherVal = blueNoiseDither(gl_FragCoord.xy, uFrameCount);
+    // Use static spatial blue noise (frame 0) for reflection pass:
+    // 1) Spatial blue noise eliminates concentric stepping rings / staircasing artifacts.
+    // 2) Static frame 0 index eliminates per-frame temporal flickering.
+    float ditherVal = uIsReflectionPass 
+        ? blueNoiseDither(gl_FragCoord.xy, 0) 
+        : blueNoiseDither(gl_FragCoord.xy, uFrameCount);
     
     float currentStepSize = EMPTY_STEP;
     float t = tNear + ditherVal * currentStepSize;
@@ -401,8 +407,8 @@ void main() {
     float transmittance = 1.0;
     bool inCloud = false;
 
-    for (int i = 0; i < MAX_STEPS; i++) {
-        if (t >= tFar || transmittance < 0.01) break;
+    for (int i = 0; i < 64; i++) {
+        if (i >= maxSteps || t >= tFar || transmittance < 0.01) break;
 
         vec3 currentPos = uCameraPos + rayDir * t;
         float distFromCam = t;
