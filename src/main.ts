@@ -256,9 +256,10 @@ compositeScene.add(compositeMesh);
   const oldJitter = cloudMaterial.uniforms.uJitter.value.clone();
 
   // Set cloud uniforms to match the mirror camera perspective
-  cloudMaterial.uniforms.uProjectionInverse.value.copy(
-    camera.projectionMatrixInverse,
-  );
+  const mirrorProjInv = new THREE.Matrix4()
+    .copy(mirrorCamera.projectionMatrix)
+    .invert();
+  cloudMaterial.uniforms.uProjectionInverse.value.copy(mirrorProjInv);
   cloudMaterial.uniforms.uViewInverse.value.copy(mirrorCamera.matrixWorld);
   cloudMaterial.uniforms.uCameraPos.value.copy(mirrorCamera.position);
   cloudMaterial.uniforms.uDepthTexture.value = null; // Disable depth clipping for the sky/reflection pass
@@ -809,6 +810,10 @@ function animate() {
 
   camera.updateMatrixWorld();
 
+  // Advance time and camera matrices BEFORE rendering scene & water reflection pass
+  cloudMaterial.updateTime(simDelta);
+  cloudMaterial.updateCamera(camera);
+
   // Update fog colour to match the current horizon colour
   if (scene.fog instanceof THREE.FogExp2) {
     (scene.fog as THREE.FogExp2).color.copy(
@@ -838,8 +843,6 @@ function animate() {
   } else {
     // WebGL Fallback Pass
     cloudMaterial.uniforms.uJitter.value.set(jitterX, jitterY);
-    cloudMaterial.updateTime(simDelta);
-    cloudMaterial.updateCamera(camera);
 
     renderer.setClearColor(0x000000, 0.0);
     renderer.setRenderTarget(cloudRenderTarget);
