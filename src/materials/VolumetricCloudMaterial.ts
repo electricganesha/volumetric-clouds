@@ -2,10 +2,13 @@ import * as THREE from "three";
 import cloudVertexShader from "../shaders/cloudVertex.glsl?raw";
 import cloudFragmentShader from "../shaders/cloudFragment.glsl?raw";
 
+import { generateBlueNoiseTexture } from "../noise/blueNoise";
+
 export interface VolumetricCloudMaterialOptions {
   baseNoise?: THREE.Data3DTexture;
   detailNoise?: THREE.Data3DTexture;
   weatherMap?: THREE.DataTexture;
+  blueNoise?: THREE.DataTexture;
 }
 
 // Tiny placeholder 3D texture (1×1×1, all white)
@@ -130,7 +133,9 @@ export class VolumetricCloudMaterial extends THREE.ShaderMaterial {
         uBaseNoise: { value: options.baseNoise ?? makePlaceholder3D() },
         uDetailNoise: { value: options.detailNoise ?? makePlaceholder3D() },
         uWeatherMap: { value: options.weatherMap ?? makePlaceholder2D() },
+        uBlueNoise: { value: options.blueNoise ?? generateBlueNoiseTexture() },
         uDepthTexture: { value: dummyDepth },
+        uFrameCount: { value: 0 },
 
         uCameraPos: { value: new THREE.Vector3() },
         uSunDirection: {

@@ -95,6 +95,13 @@ fn raySphericalShellIntersection(ro: vec3<f32>, rd: vec3<f32>, innerAlt: f32, ou
     return vec2<f32>(tNear, tFar);
 }
 
+fn spatiotemporalDither(position: vec2<f32>, time: f32) -> f32 {
+    let magic = vec3<f32>(0.06711056, 0.00583715, 52.9829189);
+    let base = fract(magic.z * fract(dot(position, magic.xy)));
+    let goldenTemporal = fract(time * 0.61803398875);
+    return fract(base + goldenTemporal);
+}
+
 fn interleavedGradientNoise(position: vec2<f32>) -> f32 {
     let magic = vec3<f32>(0.06711056, 0.00583715, 52.9829189);
     return fract(magic.z * fract(dot(position, magic.xy)));
@@ -354,7 +361,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let EMPTY_STEP = FINE_STEP * 2.5;    
     let MACRO_STEP = EMPTY_STEP * 3.5;
 
-    let ignDither = interleavedGradientNoise(vec2<f32>(f32(global_id.x), f32(global_id.y)));
+    let ignDither = spatiotemporalDither(vec2<f32>(f32(global_id.x), f32(global_id.y)), uniforms.time);
     
     var currentStepSize = EMPTY_STEP;
     var t = tNear + ignDither * currentStepSize;

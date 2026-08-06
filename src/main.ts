@@ -810,9 +810,10 @@ function animate() {
 
   camera.updateMatrixWorld();
 
-  // Advance time and camera matrices BEFORE rendering scene & water reflection pass
+  // Advance time, frame count, and camera matrices BEFORE rendering scene & water reflection pass
   cloudMaterial.updateTime(simDelta);
   cloudMaterial.updateCamera(camera);
+  cloudMaterial.uniforms.uFrameCount.value = frameCount;
 
   // Update fog colour to match the current horizon colour
   if (scene.fog instanceof THREE.FogExp2) {

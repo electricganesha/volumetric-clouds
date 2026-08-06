@@ -7,8 +7,10 @@ layout(location = 0) out vec4 fragColor;
 uniform sampler3D uBaseNoise;
 uniform sampler3D uDetailNoise;
 uniform sampler2D uWeatherMap;
+uniform sampler2D uBlueNoise;
 uniform sampler2D uDepthTexture;
 
+uniform int uFrameCount;
 uniform vec3 uCameraPos;
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
@@ -94,7 +96,15 @@ vec2 raySphericalShellIntersection(vec3 ro, vec3 rd, float innerAlt, float outer
     return vec2(tNear, tFar);
 }
 
-// Jorge Jimenez Interleaved Gradient Noise (IGN) — Static spatial dither
+// Spatiotemporal Blue Noise Dithering with Golden Ratio Temporal Accumulation
+float blueNoiseDither(vec2 coord, int frame) {
+    vec2 blueUv = coord / vec2(64.0);
+    float blue = texture(uBlueNoise, blueUv).r;
+    float goldenOffset = float(frame % 64) * 0.61803398875;
+    return fract(blue + goldenOffset);
+}
+
+// Jorge Jimenez Interleaved Gradient Noise (IGN) — Fallback dither
 float interleavedGradientNoise(vec2 position) {
     vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
     return fract(magic.z * fract(dot(position, magic.xy)));
@@ -378,10 +388,10 @@ void main() {
     float EMPTY_STEP = FINE_STEP * 2.5;    
     float MACRO_STEP = EMPTY_STEP * 3.5;
 
-    float ignDither = interleavedGradientNoise(gl_FragCoord.xy);
+    float ditherVal = blueNoiseDither(gl_FragCoord.xy, uFrameCount);
     
     float currentStepSize = EMPTY_STEP;
-    float t = tNear + ignDither * currentStepSize;
+    float t = tNear + ditherVal * currentStepSize;
 
     vec3 lightDir = normalize(uSunDirection);
     float cosTheta = dot(rayDir, lightDir);
@@ -427,7 +437,7 @@ void main() {
             float heightFrac = clamp((altitude - uBoxMin.y) / (uBoxMax.y - uBoxMin.y), 0.0, 1.0);
 
             // Light Optical Depth Transmittance
-            float lightOpticalDepth = calculateLightOpticalDepth(currentPos, ignDither, distFromCam);
+            float lightOpticalDepth = calculateLightOpticalDepth(currentPos, ditherVal, distFromCam);
             float primaryAttenuation = exp(-lightOpticalDepth * 0.0025 * uShadowAbsorption);
 
             // Powder Term Blend Logic
@@ -512,7 +522,7 @@ void main() {
     vec3 toneMappedColor = toneMapACES(accumulatedColor * 1.10);
 
     // Output Dithering
-    vec3 ditheredColor = toneMappedColor + (ignDither - 0.5) / 255.0;
+    vec3 ditheredColor = toneMappedColor + (ditherVal - 0.5) / 255.0;
 
     fragColor = vec4(max(vec3(0.0), ditheredColor), alpha);
     fragDistance = vec4(t, 0.0, 0.0, 1.0);
