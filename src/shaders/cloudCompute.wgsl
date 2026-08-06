@@ -320,9 +320,10 @@ fn calculateLightOpticalDepth(pos: vec3<f32>, dither: f32, distFromCam: f32) -> 
     // Cached column optical depth from current altitude up to top of cloud layer
     let cachedOpticalDepth = fastSunCoverage * remainingDist * 0.00035 * uniforms.densityMultiplier;
 
-    // 2. High-frequency local contact shadow sample (1 single micro-step)
-    let contactPos = pos + lightDir * (shadowStepSize * dither);
-    let localContactDensity = sampleCloudDensityFast(contactPos);
+    // 2. Dual-tap frame-stable local contact shadow sample (eliminates temporal noise at low shadow absorption)
+    let contactPos1 = pos + lightDir * (shadowStepSize * 0.4);
+    let contactPos2 = pos + lightDir * (shadowStepSize * 1.1);
+    let localContactDensity = sampleCloudDensityFast(contactPos1) * 0.65 + sampleCloudDensityFast(contactPos2) * 0.35;
     let localOpticalDepth = localContactDensity * shadowStepSize;
 
     return cachedOpticalDepth + localOpticalDepth;

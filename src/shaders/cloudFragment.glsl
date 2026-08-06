@@ -334,9 +334,10 @@ float calculateLightOpticalDepth(vec3 pos, float dither, float distFromCam) {
     // Cached column optical depth from current altitude up to top of cloud layer
     float cachedOpticalDepth = fastSunCoverage * remainingDist * 0.00035 * uDensityMultiplier;
 
-    // 2. High-frequency local contact shadow sample (1 single micro-step)
-    vec3 contactPos = pos + lightDir * (shadowStepSize * dither);
-    float localContactDensity = sampleCloudDensityFast(contactPos);
+    // 2. Dual-tap frame-stable local contact shadow sample (eliminates temporal noise at low shadow absorption)
+    vec3 contactPos1 = pos + lightDir * (shadowStepSize * 0.4);
+    vec3 contactPos2 = pos + lightDir * (shadowStepSize * 1.1);
+    float localContactDensity = sampleCloudDensityFast(contactPos1) * 0.65 + sampleCloudDensityFast(contactPos2) * 0.35;
     float localOpticalDepth = localContactDensity * shadowStepSize;
 
     return cachedOpticalDepth + localOpticalDepth;
