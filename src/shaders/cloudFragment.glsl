@@ -354,16 +354,33 @@ void main() {
     // 2. Depth Capping
     float rawDepth = texture(uDepthTexture, vUv).r;
     float tMaxScene = 1e8;
+    
+    // --- NEW: Earth Core Ray Blocker ---
+    // Prevent reflection rays from traveling through the planet to the opposite hemisphere
+    vec3 earthCenterPos = vec3(uCameraPos.x, uCameraPos.y + EARTH_RADIUS, uCameraPos.z);
+    float bEarth = dot(earthCenterPos, rayDir);
+    float cEarth = dot(earthCenterPos, earthCenterPos) - (EARTH_RADIUS * EARTH_RADIUS);
+    float detEarth = bEarth * bEarth - cEarth;
+    
+    if (detEarth > 0.0) {
+        float tEarth = -bEarth - sqrt(detEarth);
+        if (tEarth > 0.0) {
+            // The ray hit the ground. Cap the maximum distance.
+            tMaxScene = min(tMaxScene, tEarth);
+        }
+    }
+    // -----------------------------------
+
     if (rawDepth < 0.99999) {
         vec4 viewPos = uProjectionInverse * vec4(ndc, rawDepth * 2.0 - 1.0, 1.0);
         viewPos /= viewPos.w;
         vec4 worldPosScene = uViewInverse * viewPos;
-        // Only cap depth if scene geometry is inside or above the cloud volume (e.g. high mountains)
+        
         if (worldPosScene.y >= uBoxMin.y) {
             float terrainDist = length(worldPosScene.xyz - uCameraPos);
             vec2 testAtmos = raySphericalShellIntersection(uCameraPos, rayDir, uBoxMin.y, uBoxMax.y);
             if (terrainDist > max(testAtmos.x, 0.0)) {
-                tMaxScene = terrainDist;
+                tMaxScene = min(tMaxScene, terrainDist);
             }
         }
     }
@@ -373,13 +390,12 @@ void main() {
     float tNear = rayAtmosphere.x;
     float tFar = rayAtmosphere.y;
 
-    if (tNear >= tFar || tFar <= 0.0) {
+    // Fixed: Explicitly write to the distance buffer to prevent TAA motion vector explosion
+    if (tNear >= tFar || tFar <= 0.0 || tNear >= tMaxScene) {
         fragColor = vec4(0.0);
+        fragDistance = vec4(1e8, 0.0, 0.0, 1.0); // 1e8 represents "infinite" depth
         return;
     }
-
-    tNear = max(tNear, 0.0);
-    tFar = min(tFar, tMaxScene);
 
     // 4. Raymarching Step Setup
     int maxSteps = uIsReflectionPass ? 48 : 64;
@@ -391,8 +407,6 @@ void main() {
     float MACRO_STEP = EMPTY_STEP * 3.5;
 
     // Use static spatial blue noise (frame 0) for reflection pass:
-    // 1) Spatial blue noise eliminates concentric stepping rings / staircasing artifacts.
-    // 2) Static frame 0 index eliminates per-frame temporal flickering.
     float ditherVal = uIsReflectionPass 
         ? blueNoiseDither(gl_FragCoord.xy, 0) 
         : blueNoiseDither(gl_FragCoord.xy, uFrameCount);

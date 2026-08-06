@@ -10,9 +10,11 @@ import taaVertexShader from "./shaders/taaVertex.glsl?raw";
 import taaFragmentShader from "./shaders/taaFragment.glsl?raw";
 
 // Detect Mobile Device / High-DPI Mobile GPU (e.g. Pixel 8 Pro, iPhone)
-const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-  typeof navigator !== "undefined" ? navigator.userAgent : ""
-) || (typeof window !== "undefined" && window.innerWidth <= 768);
+const isMobile =
+  /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+    typeof navigator !== "undefined" ? navigator.userAgent : "",
+  ) ||
+  (typeof window !== "undefined" && window.innerWidth <= 768);
 
 // Cap max DPR on mobile to 1.0 to prevent 36MP fill-rate bottleneck on 3.0x DPR screens
 const maxDpr = isMobile ? 1.0 : 1.25;
@@ -45,7 +47,7 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.05;
 controls.enableZoom = false;
 controls.enablePan = false;
-controls.maxPolarAngle = Math.PI / 2 - 0.01;
+// controls.maxPolarAngle = Math.PI / 2 - 0.01;
 controls.minDistance = 10;
 controls.maxDistance = 200000;
 controls.target.set(0, 1400, -1000);
@@ -133,11 +135,14 @@ const sceneRenderTarget = new THREE.WebGLRenderTarget(fullWidth, fullHeight, {
 });
 
 // Volumetric Clouds Material — created immediately, textures load async in worker
-const cloudMaterial = VolumetricCloudMaterial.createAsync({}, (base, detail, weather) => {
-  if (cloudCompute) {
-    cloudCompute.setNoiseTextures(base, detail, weather);
-  }
-});
+const cloudMaterial = VolumetricCloudMaterial.createAsync(
+  {},
+  (base, detail, weather) => {
+    if (cloudCompute) {
+      cloudCompute.setNoiseTextures(base, detail, weather);
+    }
+  },
+);
 
 cloudMaterial.setDepthTexture(sceneRenderTarget.depthTexture);
 
@@ -165,18 +170,18 @@ const cloudRenderTarget = new THREE.WebGLRenderTarget(
     magFilter: THREE.LinearFilter,
     format: THREE.RGBAFormat,
     type: THREE.HalfFloatType,
-  }
+  },
 );
 cloudRenderTarget.textures[0].name = "color";
 cloudRenderTarget.textures[1].name = "distance";
 
-
-const createTAATarget = () => new THREE.WebGLRenderTarget(fullWidth, fullHeight, {
-  minFilter: THREE.LinearFilter,
-  magFilter: THREE.LinearFilter,
-  format: THREE.RGBAFormat,
-  type: THREE.HalfFloatType,
-});
+const createTAATarget = () =>
+  new THREE.WebGLRenderTarget(fullWidth, fullHeight, {
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.HalfFloatType,
+  });
 let taaHistoryA = createTAATarget();
 let taaHistoryB = createTAATarget();
 let taaReadTarget = taaHistoryA;
@@ -185,10 +190,22 @@ let taaWriteTarget = taaHistoryB;
 let frameCount = 0;
 // Halton Sequence (2, 3) for 16 samples
 const halton23 = [
-    [0.5, 0.33333333], [0.25, 0.66666667], [0.75, 0.11111111], [0.125, 0.44444444],
-    [0.625, 0.77777778], [0.375, 0.22222222], [0.875, 0.55555556], [0.0625, 0.88888889],
-    [0.5625, 0.03703704], [0.3125, 0.37037037], [0.8125, 0.7037037], [0.1875, 0.14814815],
-    [0.6875, 0.48148148], [0.4375, 0.81481481], [0.9375, 0.25925926], [0.03125, 0.59259259]
+  [0.5, 0.33333333],
+  [0.25, 0.66666667],
+  [0.75, 0.11111111],
+  [0.125, 0.44444444],
+  [0.625, 0.77777778],
+  [0.375, 0.22222222],
+  [0.875, 0.55555556],
+  [0.0625, 0.88888889],
+  [0.5625, 0.03703704],
+  [0.3125, 0.37037037],
+  [0.8125, 0.7037037],
+  [0.1875, 0.14814815],
+  [0.6875, 0.48148148],
+  [0.4375, 0.81481481],
+  [0.9375, 0.25925926],
+  [0.03125, 0.59259259],
 ];
 
 // Tracking matrices for reprojection
@@ -265,7 +282,6 @@ compositeScene.add(compositeMesh);
   const oldDepth = cloudMaterial.uniforms.uDepthTexture.value;
   const oldJitter = cloudMaterial.uniforms.uJitter.value.clone();
 
-  // Set cloud uniforms to match the mirror camera perspective
   const mirrorProjInv = new THREE.Matrix4()
     .copy(mirrorCamera.projectionMatrix)
     .invert();
@@ -853,7 +869,8 @@ function animate() {
     cloudCompute.tickFrame(camera, now / 1000, jitterX, jitterY, cloudMaterial);
     taaMaterial.uniforms.uCurrentCloud.value = cloudCompute.colorTexture;
     taaMaterial.uniforms.uCurrentDistance.value = cloudCompute.distanceTexture;
-    compositeMaterial.uniforms.uCloudDistance.value = cloudCompute.distanceTexture;
+    compositeMaterial.uniforms.uCloudDistance.value =
+      cloudCompute.distanceTexture;
   } else {
     // WebGL Fallback Pass
     cloudMaterial.uniforms.uJitter.value.set(jitterX, jitterY);
@@ -865,23 +882,25 @@ function animate() {
 
     taaMaterial.uniforms.uCurrentCloud.value = cloudRenderTarget.textures[0];
     taaMaterial.uniforms.uCurrentDistance.value = cloudRenderTarget.textures[1];
-    compositeMaterial.uniforms.uCloudDistance.value = cloudRenderTarget.textures[1];
+    compositeMaterial.uniforms.uCloudDistance.value =
+      cloudRenderTarget.textures[1];
   }
   taaMaterial.uniforms.uHistoryCloud.value = taaReadTarget.texture;
-  
+
   if (frameCount === 0) {
     taaMaterial.uniforms.uPreviousViewProjectionMatrix.value.multiplyMatrices(
       camera.projectionMatrix,
-      camera.matrixWorldInverse
+      camera.matrixWorldInverse,
     );
   } else {
-    taaMaterial.uniforms.uPreviousViewProjectionMatrix.value.copy(previousViewProjectionMatrix);
+    taaMaterial.uniforms.uPreviousViewProjectionMatrix.value.copy(
+      previousViewProjectionMatrix,
+    );
   }
-  
-  taaMaterial.uniforms.uViewProjectionMatrixInverse.value.multiplyMatrices(
-    camera.projectionMatrix,
-    camera.matrixWorldInverse
-  ).invert();
+
+  taaMaterial.uniforms.uViewProjectionMatrixInverse.value
+    .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+    .invert();
   taaMaterial.uniforms.uCameraPos.value.copy(camera.position);
 
   renderer.setRenderTarget(taaWriteTarget);
@@ -922,7 +941,7 @@ function animate() {
   // Update tracking state for next frame
   previousViewProjectionMatrix.multiplyMatrices(
     camera.projectionMatrix,
-    camera.matrixWorldInverse
+    camera.matrixWorldInverse,
   );
   frameCount++;
 }

@@ -69,11 +69,18 @@ void main() {
 
     // --- Stable mirror UV with wave distortion ---
     // Use standard projective mirror coord, distorted by the XZ surface normal.
-    // Multiplier 0.018 gives visible ripple stretching like real water.
     vec2 baseUv = mirrorCoord.xy / mirrorCoord.w;
     vec2 distortion = surfaceNormal.xz * distortionScale * 0.018;
-    vec2 sampleUv = clamp(baseUv + distortion, 0.001, 0.999);
-    vec3 reflectionSample = texture2D( mirrorSampler, sampleUv ).rgb;
+    vec2 sampleUv = baseUv + distortion;
+
+    // Smooth edge fade for out-of-bounds reflection UVs (eliminates edge-stretching fan artifacts when looking up)
+    vec2 edgeFactor = smoothstep(vec2(0.0), vec2(0.08), sampleUv) * 
+                      (vec2(1.0) - smoothstep(vec2(0.92), vec2(1.0), sampleUv));
+    float reflectionValid = edgeFactor.x * edgeFactor.y;
+
+    vec3 rawReflection = texture2D( mirrorSampler, clamp(sampleUv, 0.001, 0.999) ).rgb;
+    // Smoothly fade to sky depth color at out-of-bounds reflection boundaries
+    vec3 reflectionSample = mix(waterColor * 0.8 + vec3(0.1, 0.2, 0.35), rawReflection, reflectionValid);
 
     // --- Schlick Fresnel with boosted R0 for glassy water ---
     float theta = max( dot( eyeDirection, surfaceNormal ), 0.0 );
