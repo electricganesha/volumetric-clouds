@@ -163,6 +163,23 @@ fn getSmoothHeightProfile(heightFrac: f32, cloudType: f32) -> f32 {
     return mix(blendedMid, cbProfile, midToHigh);
 }
 
+fn sampleFastCoverage(p: vec3<f32>) -> f32 {
+    let earthCenterPos = vec3<f32>(p.x, p.y + EARTH_RADIUS, p.z);
+    let altitude = length(earthCenterPos) - EARTH_RADIUS;
+
+    let heightFrac = clamp((altitude - uniforms.boxMin.y) / (uniforms.boxMax.y - uniforms.boxMin.y), 0.0, 1.0);
+    if (heightFrac <= 0.0 || heightFrac >= 1.0) { return 0.0; }
+
+    let weatherUv = p.xz * 0.000005 + uniforms.windVector.xz * uniforms.time * 0.000003;
+    let weatherSample = textureSampleLevel(uWeatherMap, smp, weatherUv, 0.0);
+
+    let coverage = clamp(weatherSample.r * uniforms.cloudCoverage, 0.0, 1.0);
+    if (coverage <= 0.005) { return 0.0; }
+
+    let heightProfile = getSmoothHeightProfile(heightFrac, weatherSample.g);
+    return coverage * heightProfile;
+}
+
 fn sampleCloudDensity(p: vec3<f32>, distFromCam: f32) -> f32 {
     let earthCenterPos = vec3<f32>(p.x, p.y + EARTH_RADIUS, p.z);
     let altitude = length(earthCenterPos) - EARTH_RADIUS;
@@ -359,11 +376,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let currentPos = uniforms.cameraPos + rayDir * t;
         let distFromCam = t;
+
+        // Level 1 Hierarchical Empty Space Skipping: Fast 2D Weather Coverage Map & Height Pre-Check
+        let fastCoverage = sampleFastCoverage(currentPos);
+        if (fastCoverage <= 0.001) {
+            if (inCloud) {
+                inCloud = false;
+                currentStepSize = EMPTY_STEP;
+            }
+            // Ray is in clear space — macro-skip ahead without sampling 3D noise textures
+            t += MACRO_STEP;
+            continue;
+        }
+
+        // Level 2: Density Evaluation & Micro-Stepping Boundary Transition
         let density = sampleCloudDensity(currentPos, distFromCam);
 
         if (density > 0.001) {
             if (!inCloud) {
                 inCloud = true;
+                // Backtrack 1 step to hit exact cloud boundary, then switch to fine steps
                 t -= currentStepSize;
                 currentStepSize = FINE_STEP;
                 t += currentStepSize;
@@ -410,6 +442,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (inCloud) {
                 inCloud = false;
                 currentStepSize = EMPTY_STEP;
+            } else {
+                currentStepSize = min(currentStepSize * 1.25, EMPTY_STEP * 1.5);
             }
         }
         

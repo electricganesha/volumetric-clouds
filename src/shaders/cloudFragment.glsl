@@ -171,6 +171,23 @@ float getSmoothHeightProfile(float heightFrac, float cloudType) {
     return mix(blendedMid, cbProfile, midToHigh);
 }
 
+// Hierarchical Empty Space Skipping: Fast 2D Weather Coverage & Height Pre-Check
+float sampleFastCoverage(vec3 p) {
+    vec3 earthCenterPos = vec3(p.x, p.y + EARTH_RADIUS, p.z);
+    float altitude = length(earthCenterPos) - EARTH_RADIUS;
+
+    float heightFrac = clamp((altitude - uBoxMin.y) / (uBoxMax.y - uBoxMin.y), 0.0, 1.0);
+    if (heightFrac <= 0.0 || heightFrac >= 1.0) return 0.0;
+
+    vec2 weatherUv = p.xz * 0.000005 + uWindVector.xz * uTime * 0.000003;
+    vec4 weatherSample = texture(uWeatherMap, weatherUv);
+    float coverage = clamp(weatherSample.r * uCloudCoverage, 0.0, 1.0);
+    if (coverage <= 0.005) return 0.0;
+
+    float heightProfile = getSmoothHeightProfile(heightFrac, weatherSample.g);
+    return coverage * heightProfile;
+}
+
 // Non-Repeating Organic Cloud Density Sampling
 float sampleCloudDensity(vec3 p, float distFromCam) {
     vec3 earthCenterPos = vec3(p.x, p.y + EARTH_RADIUS, p.z);
@@ -381,11 +398,26 @@ void main() {
 
         vec3 currentPos = uCameraPos + rayDir * t;
         float distFromCam = t;
+
+        // Level 1 Hierarchical Empty Space Skipping: Fast 2D Weather & Height Envelope Pre-Check
+        float fastCoverage = sampleFastCoverage(currentPos);
+        if (fastCoverage <= 0.001) {
+            if (inCloud) {
+                inCloud = false;
+                currentStepSize = EMPTY_STEP;
+            }
+            // Ray is in clear space — macro-skip ahead without sampling 3D noise textures
+            t += MACRO_STEP;
+            continue;
+        }
+
+        // Level 2: Density Evaluation & Micro-Stepping Boundary Transition
         float density = sampleCloudDensity(currentPos, distFromCam);
 
         if (density > 0.001) {
             if (!inCloud) {
                 inCloud = true;
+                // Backtrack 1 step to hit exact cloud boundary, then switch to fine steps
                 t -= currentStepSize;
                 currentStepSize = FINE_STEP;
                 t += currentStepSize;
@@ -400,12 +432,12 @@ void main() {
             float lightOpticalDepth = calculateLightOpticalDepth(currentPos, ignDither, distFromCam);
             float primaryAttenuation = exp(-lightOpticalDepth * 0.0025 * uShadowAbsorption);
 
-            // FIX: Corrected Powder Term Blend Logic
+            // Powder Term Blend Logic
             float powderTerm = 1.0 - exp(-density * currentStepSize * 0.15 * uPowderIntensity);
             float powderMix = clamp(-cosTheta * 0.5 + 0.5, 0.0, 1.0);
             float shadowLightAttenuation = primaryAttenuation * mix(1.0, powderTerm * 2.0, powderMix);
 
-            // Sébastien Hillaire's Multi-Scattering Phase
+            // Multi-Scattering Phase
             float multiScatteringPhase = calculateMultiScattering(lightOpticalDepth, rimCosTheta, uForwardGlow);
 
             // Direct Sunlight
@@ -439,6 +471,8 @@ void main() {
             if (inCloud) {
                 inCloud = false;
                 currentStepSize = EMPTY_STEP;
+            } else {
+                currentStepSize = min(currentStepSize * 1.25, EMPTY_STEP * 1.5);
             }
         }
         
