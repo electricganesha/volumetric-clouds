@@ -303,34 +303,32 @@ float sampleCloudDensityFast(vec3 p) {
     return clamp(density, 0.0, 1.0) * boxFalloff * uDensityMultiplier * weatherDensityMultiplier;
 }
 
-// Adaptive Light Optical Depth Evaluation
+// Volumetric Shadow Caching & Analytical Transmittance Model
 float calculateLightOpticalDepth(vec3 pos, float dither, float distFromCam) {
     vec3 lightDir = normalize(uSunDirection);
     
     float sunElevationSin = max(abs(lightDir.y), 0.15);
     float shadowStepSize = (uLightStepLength / sunElevationSin) * uShadowSoftness;
 
-    float totalOpticalDepth = 0.0;
-    float tShadow = shadowStepSize * dither;
+    // 1. Calculate top-down column optical depth cache along sun ray
+    vec3 earthCenterPos = vec3(pos.x, pos.y + EARTH_RADIUS, pos.z);
+    float altitude = length(earthCenterPos) - EARTH_RADIUS;
+    float remainingHeight = max(0.0, uBoxMax.y - altitude);
+    float remainingDist = remainingHeight / sunElevationSin;
 
-    int numSteps = (distFromCam > 40000.0) ? 2 : 4;
+    // Sample 2D weather coverage along sun ray offset
+    vec3 sunOffsetPos = pos + lightDir * (shadowStepSize * 2.0);
+    float fastSunCoverage = sampleFastCoverage(sunOffsetPos);
 
-    for (int i = 0; i < numSteps; i++) {
-        vec3 curr = pos + lightDir * tShadow;
+    // Cached column optical depth from current altitude up to top of cloud layer
+    float cachedOpticalDepth = fastSunCoverage * remainingDist * 0.00035 * uDensityMultiplier;
 
-        vec3 earthCenterPos = vec3(curr.x, curr.y + EARTH_RADIUS, curr.z);
-        float altitude = length(earthCenterPos) - EARTH_RADIUS;
-        if (altitude < uBoxMin.y || altitude > uBoxMax.y) break;
+    // 2. High-frequency local contact shadow sample (1 single micro-step)
+    vec3 contactPos = pos + lightDir * (shadowStepSize * dither);
+    float localContactDensity = sampleCloudDensityFast(contactPos);
+    float localOpticalDepth = localContactDensity * shadowStepSize;
 
-        float lightDensity = sampleCloudDensityFast(curr);
-        totalOpticalDepth += lightDensity * shadowStepSize;
-
-        if (totalOpticalDepth > 3000.0) break;
-        
-        tShadow += shadowStepSize;
-    }
-
-    return totalOpticalDepth;
+    return cachedOpticalDepth + localOpticalDepth;
 }
 
 void main() {

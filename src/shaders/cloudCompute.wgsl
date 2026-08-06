@@ -300,28 +300,25 @@ fn calculateLightOpticalDepth(pos: vec3<f32>, dither: f32, distFromCam: f32) -> 
     let sunElevationSin = max(abs(lightDir.y), 0.15);
     let shadowStepSize = (uniforms.lightStepLength / sunElevationSin) * uniforms.shadowSoftness;
 
-    var totalOpticalDepth = 0.0;
-    var tShadow = shadowStepSize * dither;
+    // 1. Calculate top-down column optical depth cache along sun ray
+    let earthCenterPos = vec3<f32>(pos.x, pos.y + EARTH_RADIUS, pos.z);
+    let altitude = length(earthCenterPos) - EARTH_RADIUS;
+    let remainingHeight = max(0.0, uniforms.boxMax.y - altitude);
+    let remainingDist = remainingHeight / sunElevationSin;
 
-    var numSteps = 4;
-    if (distFromCam > 40000.0) { numSteps = 2; }
+    // Sample 2D weather coverage along sun ray offset
+    let sunOffsetPos = pos + lightDir * (shadowStepSize * 2.0);
+    let fastSunCoverage = sampleFastCoverage(sunOffsetPos);
 
-    for (var i = 0; i < numSteps; i++) {
-        let curr = pos + lightDir * tShadow;
+    // Cached column optical depth from current altitude up to top of cloud layer
+    let cachedOpticalDepth = fastSunCoverage * remainingDist * 0.00035 * uniforms.densityMultiplier;
 
-        let earthCenterPos = vec3<f32>(curr.x, curr.y + EARTH_RADIUS, curr.z);
-        let altitude = length(earthCenterPos) - EARTH_RADIUS;
-        if (altitude < uniforms.boxMin.y || altitude > uniforms.boxMax.y) { break; }
+    // 2. High-frequency local contact shadow sample (1 single micro-step)
+    let contactPos = pos + lightDir * (shadowStepSize * dither);
+    let localContactDensity = sampleCloudDensityFast(contactPos);
+    let localOpticalDepth = localContactDensity * shadowStepSize;
 
-        let lightDensity = sampleCloudDensityFast(curr);
-        totalOpticalDepth += lightDensity * shadowStepSize;
-
-        if (totalOpticalDepth > 3000.0) { break; }
-        
-        tShadow += shadowStepSize;
-    }
-
-    return totalOpticalDepth;
+    return cachedOpticalDepth + localOpticalDepth;
 }
 
 @compute @workgroup_size(8, 8, 1)
