@@ -314,33 +314,24 @@ float sampleCloudDensityFast(vec3 p) {
     return clamp(density, 0.0, 1.0) * boxFalloff * uDensityMultiplier * weatherDensityMultiplier;
 }
 
-// Volumetric Shadow Caching & Analytical Transmittance Model
-float calculateLightOpticalDepth(vec3 pos, float dither, float distFromCam) {
+// True Volumetric Shadow Raymarching (Replaces the flat analytical cache)
+float calculateLightOpticalDepth(vec3 pos, float dither) {
     vec3 lightDir = normalize(uSunDirection);
+    float stepSize = uLightStepLength;
+    float opticalDepth = 0.0;
     
-    float sunElevationSin = max(abs(lightDir.y), 0.15);
-    float shadowStepSize = (uLightStepLength / sunElevationSin) * uShadowSoftness;
-
-    // 1. Calculate top-down column optical depth cache along sun ray
-    vec3 earthCenterPos = vec3(pos.x, pos.y + EARTH_RADIUS, pos.z);
-    float altitude = length(earthCenterPos) - EARTH_RADIUS;
-    float remainingHeight = max(0.0, uBoxMax.y - altitude);
-    float remainingDist = remainingHeight / sunElevationSin;
-
-    // Sample 2D weather coverage along sun ray offset
-    vec3 sunOffsetPos = pos + lightDir * (shadowStepSize * 2.0);
-    float fastSunCoverage = sampleFastCoverage(sunOffsetPos);
-
-    // Cached column optical depth from current altitude up to top of cloud layer
-    float cachedOpticalDepth = fastSunCoverage * remainingDist * 0.00035 * uDensityMultiplier;
-
-    // 2. Dual-tap frame-stable local contact shadow sample (eliminates temporal noise at low shadow absorption)
-    vec3 contactPos1 = pos + lightDir * (shadowStepSize * 0.4);
-    vec3 contactPos2 = pos + lightDir * (shadowStepSize * 1.1);
-    float localContactDensity = sampleCloudDensityFast(contactPos1) * 0.65 + sampleCloudDensityFast(contactPos2) * 0.35;
-    float localOpticalDepth = localContactDensity * shadowStepSize;
-
-    return cachedOpticalDepth + localOpticalDepth;
+    // Jitter the starting position slightly to prevent banding inside the shadow
+    vec3 rayPos = pos + lightDir * (stepSize * dither);
+    
+    // Cone-stepping: take 5 steps towards the sun, increasing step size to escape faster
+    for (int i = 0; i < 5; i++) {
+        float density = sampleCloudDensityFast(rayPos);
+        opticalDepth += density * stepSize;
+        rayPos += lightDir * stepSize;
+        stepSize *= 1.5; // Multiply step size to cover more distance with fewer loops
+    }
+    
+    return opticalDepth;
 }
 
 void main() {
@@ -458,31 +449,33 @@ void main() {
             float heightFrac = clamp((altitude - uBoxMin.y) / (uBoxMax.y - uBoxMin.y), 0.0, 1.0);
 
             // Light Optical Depth Transmittance
-            float lightOpticalDepth = calculateLightOpticalDepth(currentPos, ditherVal, distFromCam);
-            float primaryAttenuation = exp(-lightOpticalDepth * 0.0025 * uShadowAbsorption);
+            float lightOpticalDepth = calculateLightOpticalDepth(currentPos, ditherVal);
+            
+            // Scale the absorption to force deep shadows where density is high
+            float primaryAttenuation = exp(-lightOpticalDepth * 0.007 * uShadowAbsorption);
 
-            // Powder Term Blend Logic
-            float powderTerm = 1.0 - exp(-density * currentStepSize * 0.15 * uPowderIntensity);
-            float powderMix = clamp(-cosTheta * 0.5 + 0.5, 0.0, 1.0);
-            float shadowLightAttenuation = primaryAttenuation * mix(1.0, powderTerm * 2.0, powderMix);
+            // Powder Term: Highlights thin edges facing the sun (creates the Silver Lining)
+            float powderTerm = 1.0 - exp(-density * currentStepSize * 2.0);
+            float shadowLightAttenuation = primaryAttenuation * mix(1.0, powderTerm * uPowderIntensity, clamp(cosTheta, 0.0, 1.0));
 
             // Multi-Scattering Phase
             float multiScatteringPhase = calculateMultiScattering(lightOpticalDepth, rimCosTheta, uForwardGlow);
 
-            // Direct Sunlight
-            vec3 directLight = uSunColor * 5.0 * multiScatteringPhase * shadowLightAttenuation;
+            // Direct Sunlight (Reduced the * 5.0 blowout multiplier for true contrast)
+            vec3 directLight = uSunColor * 2.0 * multiScatteringPhase * shadowLightAttenuation;
 
             // Ambient Occlusion and Bounced Light
             vec3 skyAmbient = mix(uHorizonColor, uZenithColor, heightFrac);
             vec3 groundAmbient = uGroundBounceColor * (1.0 - heightFrac);
-            float cloudAmbientOcclusion = mix(0.3, 1.0, exp(-density * 1.5)); 
             
-            vec3 ambientLight = (skyAmbient * 0.65 + groundAmbient * 0.35) * cloudAmbientOcclusion * uShadowIntensity;
+            // Deepen ambient occlusion inside dense cloud cores
+            float cloudAmbientOcclusion = mix(0.1, 1.0, exp(-density * currentStepSize * 0.1)); 
+            vec3 ambientLight = (skyAmbient * 0.5 + groundAmbient * 0.2) * cloudAmbientOcclusion * uShadowIntensity;
 
-            // Deep Base / Bright Top Dynamic Tinting
-            vec3 cloudTopTint  = mix(vec3(0.95, 0.96, 1.0), uSunColor, 0.15);
-            vec3 cloudBaseTint = vec3(0.55, 0.60, 0.68); 
-            vec3 cloudBodyColor = mix(cloudBaseTint, cloudTopTint, heightFrac * 0.6 + shadowLightAttenuation * 0.4);
+            // Darker base tint for dramatic contrast against the lit tops
+            vec3 cloudBaseTint = vec3(0.35, 0.40, 0.45); 
+            vec3 cloudTopTint  = vec3(1.0, 1.0, 1.0);
+            vec3 cloudBodyColor = mix(cloudBaseTint, cloudTopTint, smoothstep(0.1, 0.9, heightFrac));
 
             vec3 stepLight = directLight * cloudBodyColor + ambientLight;
 

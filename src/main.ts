@@ -332,20 +332,20 @@ const params = {
   resScale: isMobile ? "0.35x (Fast Mobile)" : "0.5x (Smooth 60 FPS)",
   useWebGPUCompute: false,
   coverage: 0.7,
-  density: 1.8,
+  density: 1.3,
   cloudScale: 1.5,
   detailScale: 0.4,
   anisotropy: 2.45,
   warpStrength: 0.6,
 
-  forwardGlow: 0.8,
-  shadowIntensity: 1.8,
+  forwardGlow: 1.8,
+  shadowIntensity: 2.3,
   powderIntensity: 1.2,
-  groundBounceColor: "#b3e5ff",
+  groundBounceColor: "#d1f1ff",
 
   shadowAbsorption: 0.7,
   shadowSoftness: 1.0,
-  lightStepLength: 300,
+  lightStepLength: 80,
 
   timeScale: 2.2,
   windSpeed: 68,
@@ -357,7 +357,7 @@ const params = {
   cloudMaxY: 11200,
 
   enableVignette: true,
-  vignetteDarkness: 0.55,
+  vignetteDarkness: 0.25,
   vignetteFalloff: 0.85,
 
   enableChromaticAberration: true,

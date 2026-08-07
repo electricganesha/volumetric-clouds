@@ -301,32 +301,22 @@ fn sampleCloudDensityFast(p: vec3<f32>) -> f32 {
     return clamp(density, 0.0, 1.0) * boxFalloff * uniforms.densityMultiplier * weatherDensityMultiplier;
 }
 
-fn calculateLightOpticalDepth(pos: vec3<f32>, dither: f32, distFromCam: f32) -> f32 {
+// True Volumetric Shadow Raymarching
+fn calculateLightOpticalDepth(pos: vec3<f32>, dither: f32) -> f32 {
     let lightDir = normalize(uniforms.sunDirection);
+    var stepSize = uniforms.lightStepLength;
+    var opticalDepth = 0.0;
     
-    let sunElevationSin = max(abs(lightDir.y), 0.15);
-    let shadowStepSize = (uniforms.lightStepLength / sunElevationSin) * uniforms.shadowSoftness;
-
-    // 1. Calculate top-down column optical depth cache along sun ray
-    let earthCenterPos = vec3<f32>(pos.x, pos.y + EARTH_RADIUS, pos.z);
-    let altitude = length(earthCenterPos) - EARTH_RADIUS;
-    let remainingHeight = max(0.0, uniforms.boxMax.y - altitude);
-    let remainingDist = remainingHeight / sunElevationSin;
-
-    // Sample 2D weather coverage along sun ray offset
-    let sunOffsetPos = pos + lightDir * (shadowStepSize * 2.0);
-    let fastSunCoverage = sampleFastCoverage(sunOffsetPos);
-
-    // Cached column optical depth from current altitude up to top of cloud layer
-    let cachedOpticalDepth = fastSunCoverage * remainingDist * 0.00035 * uniforms.densityMultiplier;
-
-    // 2. Dual-tap frame-stable local contact shadow sample (eliminates temporal noise at low shadow absorption)
-    let contactPos1 = pos + lightDir * (shadowStepSize * 0.4);
-    let contactPos2 = pos + lightDir * (shadowStepSize * 1.1);
-    let localContactDensity = sampleCloudDensityFast(contactPos1) * 0.65 + sampleCloudDensityFast(contactPos2) * 0.35;
-    let localOpticalDepth = localContactDensity * shadowStepSize;
-
-    return cachedOpticalDepth + localOpticalDepth;
+    var rayPos = pos + lightDir * (stepSize * dither);
+    
+    for (var i = 0; i < 5; i++) {
+        let density = sampleCloudDensityFast(rayPos);
+        opticalDepth += density * stepSize;
+        rayPos += lightDir * stepSize;
+        stepSize *= 1.5;
+    }
+    
+    return opticalDepth;
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -411,26 +401,34 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let altitude = length(earthCenterPos) - EARTH_RADIUS;
             let heightFrac = clamp((altitude - uniforms.boxMin.y) / (uniforms.boxMax.y - uniforms.boxMin.y), 0.0, 1.0);
 
-            let lightOpticalDepth = calculateLightOpticalDepth(currentPos, ignDither, distFromCam);
-            let primaryAttenuation = exp(-lightOpticalDepth * 0.0025 * uniforms.shadowAbsorption);
+            // Light Optical Depth Transmittance
+            let lightOpticalDepth = calculateLightOpticalDepth(currentPos, ignDither);
+            
+            // Scale the absorption to force deep shadows where density is high
+            let primaryAttenuation = exp(-lightOpticalDepth * 0.007 * uniforms.shadowAbsorption);
 
-            let powderTerm = 1.0 - exp(-density * currentStepSize * 0.15 * uniforms.powderIntensity);
-            let powderMix = clamp(-cosTheta * 0.5 + 0.5, 0.0, 1.0);
-            let shadowLightAttenuation = primaryAttenuation * mix(1.0, powderTerm * 2.0, powderMix);
+            // Powder Term: Highlights thin edges facing the sun (creates the Silver Lining)
+            let powderTerm = 1.0 - exp(-density * currentStepSize * 2.0);
+            let shadowLightAttenuation = primaryAttenuation * mix(1.0, powderTerm * uniforms.powderIntensity, clamp(cosTheta, 0.0, 1.0));
 
+            // Multi-Scattering Phase
             let multiScatteringPhase = calculateMultiScattering(lightOpticalDepth, rimCosTheta, uniforms.forwardGlow);
 
-            let directLight = uniforms.sunColor * 5.0 * multiScatteringPhase * shadowLightAttenuation;
+            // Direct Sunlight (Reduced the * 5.0 blowout multiplier for true contrast)
+            let directLight = uniforms.sunColor * 2.0 * multiScatteringPhase * shadowLightAttenuation;
 
+            // Ambient Occlusion and Bounced Light
             let skyAmbient = mix(uniforms.horizonColor, uniforms.zenithColor, heightFrac);
             let groundAmbient = uniforms.groundBounceColor * (1.0 - heightFrac);
-            let cloudAmbientOcclusion = mix(0.3, 1.0, exp(-density * 1.5)); 
             
-            let ambientLight = (skyAmbient * 0.65 + groundAmbient * 0.35) * cloudAmbientOcclusion * uniforms.shadowIntensity;
+            // Deepen ambient occlusion inside dense cloud cores
+            let cloudAmbientOcclusion = mix(0.1, 1.0, exp(-density * currentStepSize * 0.1)); 
+            let ambientLight = (skyAmbient * 0.5 + groundAmbient * 0.2) * cloudAmbientOcclusion * uniforms.shadowIntensity;
 
-            let cloudTopTint  = mix(vec3<f32>(0.95, 0.96, 1.0), uniforms.sunColor, 0.15);
-            let cloudBaseTint = vec3<f32>(0.55, 0.60, 0.68); 
-            let cloudBodyColor = mix(cloudBaseTint, cloudTopTint, heightFrac * 0.6 + shadowLightAttenuation * 0.4);
+            // Darker base tint for dramatic contrast against the lit tops
+            let cloudBaseTint = vec3<f32>(0.35, 0.40, 0.45); 
+            let cloudTopTint  = vec3<f32>(1.0, 1.0, 1.0);
+            let cloudBodyColor = mix(cloudBaseTint, cloudTopTint, smoothstep(0.1, 0.9, heightFrac));
 
             let stepLight = directLight * cloudBodyColor + ambientLight;
 
@@ -487,6 +485,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ditheredColor = toneMappedColor + (ignDither - 0.5) / 255.0;
 
     let finalColor = vec4<f32>(max(vec3<f32>(0.0), ditheredColor), alpha);
+    
+    textureStore(outColorTexture, global_id.xy, finalColor);
+    textureStore(outDistanceTexture, global_id.xy, vec4<f32>(t, 0.0, 0.0, 1.0));
+}
     
     textureStore(outColorTexture, global_id.xy, finalColor);
     textureStore(outDistanceTexture, global_id.xy, vec4<f32>(t, 0.0, 0.0, 1.0));
