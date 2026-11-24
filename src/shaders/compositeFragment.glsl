@@ -16,6 +16,29 @@ uniform float uTime;
 uniform bool uEnableChromaticAberration;
 uniform float uAberrationOffset;
 
+// Sun Position & Atmospheric Light Shafts
+uniform vec2 uSunScreenPos;
+uniform vec3 uSunColor;
+uniform vec3 uSunDirection;
+uniform float uSunVisibility;
+uniform float uAspectRatio;
+
+// Horizon Fog & Atmospheric Melding
+uniform bool uEnableHorizonFog;
+uniform float uHorizonFogDensity;
+uniform float uHorizonFogHeight;
+uniform vec3 uHorizonColor;
+
+uniform bool uEnableGodRays;
+uniform float uGodRayIntensity;
+uniform float uGodRayDecay;
+uniform float uGodRayDensity;
+uniform float uGodRayWeight;
+
+uniform bool uEnableSunBloom;
+uniform float uBloomIntensity;
+uniform float uBloomRadius;
+
 uniform bool uEnableColorGrading;
 uniform float uContrast;
 uniform float uSaturation;
@@ -65,6 +88,30 @@ void main() {
   float rawDepth = texture2D(uDepthTexture, vUv).r;
   float centerDepth = getLinearDepth(rawDepth);
 
+  // --- Horizon Atmospheric Fog (Melds Sea & Sky Seamlessly) ---
+  if (uEnableHorizonFog) {
+    vec4 ndc = vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+    vec4 viewDir = uProjectionInverse * ndc;
+    vec3 rayDirWorld = normalize((uViewInverse * vec4(viewDir.xyz, 0.0)).xyz);
+
+    float angle = rayDirWorld.y;
+    // Sea surface (angle < 0) has a slightly broader maritime mist falloff
+    float effectiveHeight = (angle < 0.0) ? (uHorizonFogHeight * 1.4) : uHorizonFogHeight;
+    float fogBand = exp(-pow(abs(angle) / max(0.001, effectiveHeight), 1.8));
+
+    // Sun forward-scattering glow in the horizon mist
+    float sunScattering = max(dot(rayDirWorld, normalize(uSunDirection)), 0.0);
+    vec3 mistSunGlow = uSunColor * pow(sunScattering, 6.0) * 0.45;
+    vec3 mistColor = uHorizonColor + mistSunGlow;
+
+    // Distant ocean and sky have large depth; close water has small depth
+    float dist = (rawDepth >= 0.99999) ? 100000.0 : centerDepth;
+    float depthMask = smoothstep(2000.0, 20000.0, dist);
+
+    float totalFog = fogBand * uHorizonFogDensity * depthMask;
+    scene.rgb = mix(scene.rgb, mistColor, clamp(totalFog, 0.0, 1.0));
+  }
+
   vec4 cloud = texture2D(uCloudTexture, vUv);
   float cloudDistance = texture2D(uCloudDistance, vUv).r;
 
@@ -74,6 +121,55 @@ void main() {
   }
 
   vec3 color = scene.rgb * (1.0 - cloud.a) + cloud.rgb;
+
+  // --- Volumetric God Rays (Crepuscular Light Shafts) ---
+  if (uEnableGodRays && uSunVisibility > 0.01) {
+    vec2 deltaTexCoord = (vUv - uSunScreenPos);
+    deltaTexCoord *= (1.0 / 24.0) * uGodRayDensity;
+    vec2 sampleCoord = vUv;
+    float illuminationDecay = 1.0;
+    float godRayScattering = 0.0;
+
+    // Spatial dither to break radial stepping rings
+    sampleCoord -= deltaTexCoord * (hash(vUv * 200.0 + fract(uTime * 0.05)) * 0.75);
+
+    for (int i = 0; i < 24; i++) {
+      sampleCoord -= deltaTexCoord;
+      if (sampleCoord.x >= 0.0 && sampleCoord.x <= 1.0 && sampleCoord.y >= 0.0 && sampleCoord.y <= 1.0) {
+        vec4 cloudSample = texture2D(uCloudTexture, sampleCoord);
+        // Cloud occlusion: gaps let light stream through, thick cloud blocks it
+        float sampleOcc = clamp(1.0 - cloudSample.a * 1.25, 0.0, 1.0);
+        
+        float distToSun = length((sampleCoord - uSunScreenPos) * vec2(uAspectRatio, 1.0));
+        float radialFalloff = 1.0 / (distToSun * 3.5 + 1.0);
+
+        godRayScattering += sampleOcc * radialFalloff * illuminationDecay * uGodRayWeight;
+        illuminationDecay *= uGodRayDecay;
+      }
+    }
+
+    vec3 godRays = godRayScattering * uSunColor * uGodRayIntensity * uSunVisibility;
+    color += godRays;
+  }
+
+  // --- Physical Sun Bloom & Silver Lining Radiance ---
+  if (uEnableSunBloom && uSunVisibility > 0.01) {
+    vec2 sunDiff = (vUv - uSunScreenPos) * vec2(uAspectRatio, 1.0);
+    float sunDist = length(sunDiff);
+
+    float coreBloom = exp(-sunDist * 16.0 * (1.0 / max(0.1, uBloomRadius))) * 1.4;
+    float broadGlow = exp(-sunDist * 3.2 * (1.0 / max(0.1, uBloomRadius))) * 0.4;
+    float totalBloom = (coreBloom + broadGlow) * uBloomIntensity;
+
+    // Transmittance through clouds (bright light bleeds over cloud silhouettes)
+    float bloomTransmittance = mix(1.0, 0.35, smoothstep(0.1, 0.85, cloud.a));
+
+    // Silver lining radiance: high luminance cloud highlights bleed softly
+    float cloudLuma = dot(cloud.rgb, vec3(0.299, 0.587, 0.114));
+    float silverRadiance = smoothstep(0.65, 1.1, cloudLuma) * 0.25 * uBloomIntensity;
+
+    color += (totalBloom * bloomTransmittance + silverRadiance) * uSunColor;
+  }
 
   // --- Color grading ---
   if (uEnableColorGrading) {

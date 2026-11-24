@@ -69,18 +69,17 @@ void main() {
 
     // --- Stable mirror UV with wave distortion ---
     // Use standard projective mirror coord, distorted by the XZ surface normal.
-    vec2 baseUv = mirrorCoord.xy / mirrorCoord.w;
+    vec2 baseUv = mirrorCoord.w > 0.0001 ? (mirrorCoord.xy / mirrorCoord.w) : vec2(0.5);
     vec2 distortion = surfaceNormal.xz * distortionScale * 0.018;
-    vec2 sampleUv = baseUv + distortion;
 
-    // Smooth edge fade for out-of-bounds reflection UVs (eliminates edge-stretching fan artifacts when looking up)
-    vec2 edgeFactor = smoothstep(vec2(0.0), vec2(0.08), sampleUv) * 
-                      (vec2(1.0) - smoothstep(vec2(0.92), vec2(1.0), sampleUv));
-    float reflectionValid = edgeFactor.x * edgeFactor.y;
+    // Smoothly attenuate wave distortion in the outer edge so UVs stay cleanly inside reflection bounds
+    // without cutting off the reflection or introducing hard borders
+    vec2 edgeDist = clamp(min(baseUv, 1.0 - baseUv) * 25.0, 0.0, 1.0);
+    float distortionDampen = edgeDist.x * edgeDist.y;
+    vec2 sampleUv = clamp(baseUv + distortion * distortionDampen, 0.001, 0.999);
 
-    vec3 rawReflection = texture2D( mirrorSampler, clamp(sampleUv, 0.001, 0.999) ).rgb;
-    // Smoothly fade to sky depth color at out-of-bounds reflection boundaries
-    vec3 reflectionSample = mix(waterColor * 0.8 + vec3(0.1, 0.2, 0.35), rawReflection, reflectionValid);
+    vec3 rawReflection = texture2D( mirrorSampler, sampleUv ).rgb;
+    vec3 reflectionSample = rawReflection;
 
     // --- Schlick Fresnel with boosted R0 for glassy water ---
     float theta = max( dot( eyeDirection, surfaceNormal ), 0.0 );

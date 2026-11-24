@@ -260,6 +260,23 @@ const compositeMaterial = new THREE.ShaderMaterial({
     uVignetteFalloff: { value: 0.85 },
     uEnableFilmGrain: { value: true },
     uFilmGrainAmount: { value: 0.018 },
+    uSunScreenPos: { value: new THREE.Vector2(0.5, 0.5) },
+    uSunColor: { value: new THREE.Color(1.0, 0.95, 0.85) },
+    uSunVisibility: { value: 1.0 },
+    uAspectRatio: { value: fullWidth / fullHeight },
+    uEnableGodRays: { value: true },
+    uGodRayIntensity: { value: 0.7 },
+    uGodRayDecay: { value: 0.96 },
+    uGodRayDensity: { value: 1.0 },
+    uGodRayWeight: { value: 0.05 },
+    uEnableSunBloom: { value: true },
+    uBloomIntensity: { value: 0.65 },
+    uBloomRadius: { value: 2.0 },
+    uSunDirection: { value: new THREE.Vector3(-6000, 4500, -8000).normalize() },
+    uEnableHorizonFog: { value: true },
+    uHorizonFogDensity: { value: 0.60 },
+    uHorizonFogHeight: { value: 0.035 },
+    uHorizonColor: { value: new THREE.Color(0.8, 0.85, 0.95) },
   },
   vertexShader: compositeVertexShader,
   fragmentShader: compositeFragmentShader,
@@ -371,6 +388,19 @@ const params = {
 
   enableFilmGrain: true,
   filmGrainAmount: 0.018,
+
+  enableGodRays: true,
+  godRayIntensity: 0.7,
+  godRayDecay: 0.96,
+  godRayDensity: 1.0,
+
+  enableSunBloom: true,
+  bloomIntensity: 0.65,
+  bloomRadius: 2.0,
+
+  enableHorizonFog: true,
+  horizonFogDensity: 0.60,
+  horizonFogHeight: 0.035,
 };
 
 // Dynamic Time-of-Day Engine
@@ -392,6 +422,7 @@ const updateTimeOfDay = () => {
   const dir = new THREE.Vector3().copy(sunLight.position).normalize();
   (cloudMaterial.uniforms.uSunDirection.value as THREE.Vector3).copy(dir);
   (skyMaterial.uniforms.uSunDirection.value as THREE.Vector3).copy(dir);
+  (compositeMaterial.uniforms.uSunDirection.value as THREE.Vector3).copy(dir);
   if ((water.material as THREE.ShaderMaterial).uniforms["sunDirection"]) {
     (
       (water.material as THREE.ShaderMaterial).uniforms["sunDirection"]
@@ -492,6 +523,11 @@ const updateTimeOfDay = () => {
   (skyMaterial.uniforms.uHorizonColor.value as THREE.Color).copy(horizonColor);
   (skyMaterial.uniforms.uSunGlowColor.value as THREE.Color).copy(sunGlowColor);
 
+  (compositeMaterial.uniforms.uSunColor.value as THREE.Color).copy(sunColor);
+  (compositeMaterial.uniforms.uHorizonColor.value as THREE.Color).copy(
+    horizonColor,
+  );
+
   if ((water.material as THREE.ShaderMaterial).uniforms["sunColor"]) {
     (
       (water.material as THREE.ShaderMaterial).uniforms["sunColor"]
@@ -531,6 +567,7 @@ const updateResolutionTargets = () => {
     1.0 / cloudTargetW,
     1.0 / cloudTargetH,
   );
+  compositeMaterial.uniforms.uAspectRatio.value = fullWidth / fullHeight;
 };
 
 const updateWindVector = () => {
@@ -803,6 +840,75 @@ grainFolder
     compositeMaterial.uniforms.uFilmGrainAmount.value = v;
   });
 
+// --- Volumetric God Rays ---
+const godRayFolder = postProcessingFolder.addFolder("Volumetric God Rays (Light Shafts)");
+godRayFolder
+  .add(params, "enableGodRays")
+  .name("Enable")
+  .onChange((v: boolean) => {
+    compositeMaterial.uniforms.uEnableGodRays.value = v;
+  });
+godRayFolder
+  .add(params, "godRayIntensity", 0.0, 2.0, 0.05)
+  .name("Ray Intensity")
+  .onChange((v: number) => {
+    compositeMaterial.uniforms.uGodRayIntensity.value = v;
+  });
+godRayFolder
+  .add(params, "godRayDecay", 0.85, 0.99, 0.01)
+  .name("Length / Decay")
+  .onChange((v: number) => {
+    compositeMaterial.uniforms.uGodRayDecay.value = v;
+  });
+godRayFolder
+  .add(params, "godRayDensity", 0.2, 2.0, 0.05)
+  .name("Ray Density")
+  .onChange((v: number) => {
+    compositeMaterial.uniforms.uGodRayDensity.value = v;
+  });
+
+// --- Sun Bloom & Radiance ---
+const bloomFolder = postProcessingFolder.addFolder("Sun Bloom & Silver Lining Radiance");
+bloomFolder
+  .add(params, "enableSunBloom")
+  .name("Enable")
+  .onChange((v: boolean) => {
+    compositeMaterial.uniforms.uEnableSunBloom.value = v;
+  });
+bloomFolder
+  .add(params, "bloomIntensity", 0.0, 2.0, 0.05)
+  .name("Bloom Glow Intensity")
+  .onChange((v: number) => {
+    compositeMaterial.uniforms.uBloomIntensity.value = v;
+  });
+bloomFolder
+  .add(params, "bloomRadius", 0.5, 5.0, 0.1)
+  .name("Corona Radius")
+  .onChange((v: number) => {
+    compositeMaterial.uniforms.uBloomRadius.value = v;
+  });
+
+// --- Horizon Fog & Atmospheric Melding ---
+const horizonFogFolder = postProcessingFolder.addFolder("Horizon Fog (Sea & Sky Melding)");
+horizonFogFolder
+  .add(params, "enableHorizonFog")
+  .name("Enable")
+  .onChange((v: boolean) => {
+    compositeMaterial.uniforms.uEnableHorizonFog.value = v;
+  });
+horizonFogFolder
+  .add(params, "horizonFogDensity", 0.0, 1.0, 0.02)
+  .name("Fog Density")
+  .onChange((v: number) => {
+    compositeMaterial.uniforms.uHorizonFogDensity.value = v;
+  });
+horizonFogFolder
+  .add(params, "horizonFogHeight", 0.01, 0.15, 0.005)
+  .name("Band Spread / Height")
+  .onChange((v: number) => {
+    compositeMaterial.uniforms.uHorizonFogHeight.value = v;
+  });
+
 gui.close();
 
 // Resize Listener
@@ -934,6 +1040,16 @@ function animate() {
   );
   compositeMaterial.uniforms.uHorizonUvY.value = horizonUvY;
   compositeMaterial.uniforms.uTime.value += simDelta;
+
+  // Project sun light into screen space coordinates for God Rays & Sun Bloom
+  const sunWorldPos = sunLight.position.clone();
+  const sunNdc = sunWorldPos.project(camera);
+  const sunInFront = sunNdc.z < 1.0 && sunNdc.z > -1.0;
+  (compositeMaterial.uniforms.uSunScreenPos.value as THREE.Vector2).set(
+    sunNdc.x * 0.5 + 0.5,
+    sunNdc.y * 0.5 + 0.5,
+  );
+  compositeMaterial.uniforms.uSunVisibility.value = sunInFront ? 1.0 : 0.0;
 
   renderer.setRenderTarget(null);
   renderer.render(compositeScene, postCamera);
